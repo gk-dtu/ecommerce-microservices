@@ -38,6 +38,15 @@ public class UserService {
         return userMapper.toResponseDto(repository.findAll());
     }
 
+    public  UserResponseDto getUserById(Long id){
+        User user = repository.findById(id)
+                .orElseThrow(() -> {
+                    logger.error("User not found by id: {}", id);
+                    return new UserNotFoundException("User not found with given id: " + id);
+                });
+        return userMapper.toResponseDto(user);
+    }
+
     public UserResponseDto updateUser(Long id, UserRequestDto updatedUser) {
         User user = repository.findById(id)
                 .orElseThrow(() -> {

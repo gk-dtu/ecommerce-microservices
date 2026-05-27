@@ -15,4 +15,5 @@ public class Order {
     private Long userId;
     private Long productId;
     private Integer quantity;
+    private double totalPrice;
 }

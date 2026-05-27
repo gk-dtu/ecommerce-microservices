@@ -8,5 +8,6 @@ public class OrderResponseDto {
     private Long id;
     private Long userId;
     private Long productId;
-    private Integer quantity;;
+    private Integer quantity;
+    private double totalPrice;
 }

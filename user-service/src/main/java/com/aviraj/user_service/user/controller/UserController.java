@@ -30,6 +30,12 @@ public class UserController {
         return service.getAllUsers();
     }
 
+    @GetMapping("/{id}")
+    public UserResponseDto getUserById(@Valid @PathVariable Long id){
+        return service.getUserById(id);
+    }
+
+
     @PutMapping("/{id}")
     public ApiResponse<UserResponseDto> updateUser(@Valid @PathVariable Long id, @Valid @RequestBody UserRequestDto dto) {
         UserResponseDto response = service.updateUser(id, dto);
