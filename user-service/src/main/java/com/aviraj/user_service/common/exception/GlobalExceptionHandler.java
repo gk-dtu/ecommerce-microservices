@@ -1,6 +1,7 @@
 package com.aviraj.user_service.common.exception;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 
@@ -13,24 +14,45 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(UserNotFoundException.class)
     @ResponseStatus(HttpStatus.NOT_FOUND)
-    public ErrorResponse handleUserNotFound(UserNotFoundException ex) {
-        return new ErrorResponse(
+    public ResponseEntity<ErrorResponse> handleUserNotFound(UserNotFoundException ex) {
+        ErrorResponse response = new ErrorResponse(
                 LocalDateTime.now(),
                 404,
                 "Not Found",
-                ex.getMessage()
+                ex.getMessage(),
+                null
+        );
+
+        return new ResponseEntity<>(
+                response,
+                HttpStatus.NOT_FOUND
         );
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
-    @ResponseStatus(HttpStatus.BAD_REQUEST)
-    public Map<String, String> handleValidation(MethodArgumentNotValidException ex) {
+    public ResponseEntity<ErrorResponse> handleValidation(MethodArgumentNotValidException ex) {
 
-        Map<String, String> errors = new HashMap<>();
+        Map<String, String> validations = new HashMap<>();
 
-        ex.getBindingResult().getFieldErrors()
-                .forEach(error -> errors.put(error.getField(), error.getDefaultMessage()));
+        ex.getBindingResult()
+                .getFieldErrors()
+                .forEach(error ->
+                        validations.put(
+                                error.getField(),
+                                error.getDefaultMessage()
+                        ));
 
-        return errors;
+        ErrorResponse response = new ErrorResponse(
+                LocalDateTime.now(),
+                400,
+                "Bad Request",
+                "Validation Failed",
+                validations
+        );
+
+        return new ResponseEntity<>(
+                response,
+                HttpStatus.BAD_REQUEST
+        );
     }
 }

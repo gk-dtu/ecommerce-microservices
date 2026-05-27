@@ -1,6 +1,7 @@
 package com.aviraj.order_service.order.service;
 
 import com.aviraj.order_service.common.exception.OrderNotFoundException;
+import com.aviraj.order_service.common.exception.ResourceNotFoundException;
 import com.aviraj.order_service.order.client.*;
 import com.aviraj.order_service.order.dto.OrderRequestDto;
 import com.aviraj.order_service.order.dto.OrderResponseDto;
@@ -9,6 +10,7 @@ import com.aviraj.order_service.order.dto.UserResponseDto;
 import com.aviraj.order_service.order.entity.Order;
 import com.aviraj.order_service.order.mapper.OrderMapper;
 import com.aviraj.order_service.order.repository.OrderRepository;
+import feign.FeignException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.transaction.annotation.Transactional;
 import org.slf4j.Logger;
@@ -38,15 +40,24 @@ public class OrderService {
     public OrderResponseDto placeOrder(OrderRequestDto dto) {
         logger.info("placing order with User id: {} and product id: {}", dto.getUserId(), dto.getProductId());
 
+        UserResponseDto user;
+        ProductResponseDto product;
         // 🔥 Validate user via user-service
-        UserResponseDto user = userClient.getUserById(dto.getUserId());
-
+        try{
+            user = userClient.getUserById(dto.getUserId());
+        }catch (FeignException.NotFound e){
+            throw new ResourceNotFoundException("User not found with id: " + dto.getUserId());
+        }
         // 🔥 Validate product via product-service
-        ProductResponseDto product = productClient.getProductById(dto.getProductId());
+
+        try{
+            product = productClient.getProductById(dto.getProductId());
+        }catch (FeignException.NotFound e){
+            throw new ResourceNotFoundException("Product not found with id: " + dto.getProductId());
+        }
 
         // 🔥 Calculate total price
         double totalPrice = product.getPrice() * dto.getQuantity();
-
 
         Order order = new Order();
         order.setUserId(user.getId());
@@ -68,7 +79,7 @@ public class OrderService {
 
     public OrderResponseDto getOrderById(Long id) {
         Order order = orderRepo.findById(id)
-                .orElseThrow(() -> new OrderNotFoundException("Order not found"));
+                .orElseThrow(() -> new OrderNotFoundException("Order not found with id: " + id));
 
         return orderMapper.toOrderResponseDto(order);
     }

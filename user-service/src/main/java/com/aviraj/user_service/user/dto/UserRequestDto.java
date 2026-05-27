@@ -11,6 +11,7 @@ public class UserRequestDto {
     @NotBlank(message = "Name cannot be empty")
     private String name;
 
+    @NotBlank(message = "Email cannot be empty")
     @Email(message = "Please provide a valid email address")
     private String email;
 
