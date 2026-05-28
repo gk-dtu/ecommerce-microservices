@@ -13,11 +13,12 @@ User, Product, and Order services communicating via OpenFeign.
 
 ## Services
 
-| Service         | Port | Responsibility                          |
-|-----------------|------|-----------------------------------------|
-| discovery-server| 8761 | Eureka service registry                 |
-| user-service    | 8081 | User registration and management        |
-| product-service | 8082 | Product catalog and inventory           |
+| Service         | Port | Responsibility                             |
+|-----------------|------|-----------------------------------------   |
+| api-gateway     | 8080 | Single entry point, routes to all services |
+| discovery-server| 8761 | Eureka service registry                    |
+| user-service    | 8081 | User registration and management           |
+| product-service | 8082 | Product catalog and inventory              |
 | order-service   | 8083 | Order placement, validates user and product via Feign |
 
 ## How to Run
@@ -72,6 +73,6 @@ Eureka Dashboard → http://localhost:8761
 
 ✅ Eureka Service Discovery
 
-🚧 API Gateway (Spring Cloud Gateway)
+✅ API Gateway (Spring Cloud Gateway)
 
 🚧 Dockerization
