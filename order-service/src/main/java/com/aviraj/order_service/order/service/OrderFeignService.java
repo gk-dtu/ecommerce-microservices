@@ -8,6 +8,7 @@ import com.aviraj.order_service.order.dto.ProductResponseDto;
 import com.aviraj.order_service.order.dto.UserResponseDto;
 import feign.FeignException;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.retry.annotation.Retry;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,11 +23,13 @@ public class OrderFeignService {
     private final Logger logger = LoggerFactory.getLogger(OrderFeignService.class);
 
     @CircuitBreaker(name = "userClient", fallbackMethod = "userServiceFallback")
+    @Retry(name = "userClient")
     public UserResponseDto getUser(Long userId) {
         return userClient.getUserById(userId);
     }
 
     @CircuitBreaker(name = "productClient", fallbackMethod = "productServiceFallback")
+    @Retry(name = "productClient")
     public ProductResponseDto getProduct(Long productId) {
         return productClient.getProductById(productId);
     }
