@@ -1,10 +1,12 @@
 package com.aviraj.order_service.order.service;
 
+import com.aviraj.order_service.common.exception.ResourceNotFoundException;
 import com.aviraj.order_service.common.exception.ServiceUnavailableException;
 import com.aviraj.order_service.order.client.ProductClient;
 import com.aviraj.order_service.order.client.UserClient;
 import com.aviraj.order_service.order.dto.ProductResponseDto;
 import com.aviraj.order_service.order.dto.UserResponseDto;
+import feign.FeignException;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -30,11 +32,20 @@ public class OrderFeignService {
     }
 
     public UserResponseDto userServiceFallback(Long userId, Throwable ex) {
+
+        if (ex instanceof FeignException.NotFound) {
+            throw new ResourceNotFoundException("User not found with id: " + userId);
+        }
         logger.error("user-service unavailable: {}", ex.getMessage());
         throw new ServiceUnavailableException("User service is currently unavailable. Please try again later.");
     }
 
     public ProductResponseDto productServiceFallback(Long productId, Throwable ex) {
+
+        // 404 = product not found — don't treat as service down
+        if (ex instanceof FeignException.NotFound) {
+            throw new ResourceNotFoundException("Product not found with id: " + productId);
+        }
         logger.error("product-service unavailable: {}", ex.getMessage());
         throw new ServiceUnavailableException("Product service is currently unavailable. Please try again later.");
     }
