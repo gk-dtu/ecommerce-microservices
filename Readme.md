@@ -15,6 +15,7 @@ User, Product, and Order services communicating via OpenFeign.
 
 | Service         | Port | Responsibility                          |
 |-----------------|------|-----------------------------------------|
+| discovery-server| 8761 | Eureka service registry                 |
 | user-service    | 8081 | User registration and management        |
 | product-service | 8082 | Product catalog and inventory           |
 | order-service   | 8083 | Order placement, validates user and product via Feign |
@@ -22,15 +23,19 @@ User, Product, and Order services communicating via OpenFeign.
 ## How to Run
 
 ```bash
-# Terminal 1
+# 1. Eureka Server must start first
+cd discovery-server && mvn spring-boot:run
+
+# 2
 cd user-service && mvn spring-boot:run
 
-# Terminal 2
+# 3
 cd product-service && mvn spring-boot:run
 
-# Terminal 3
+# 4
 cd order-service && mvn spring-boot:run
 ```
+Eureka Dashboard → http://localhost:8761
 
 ## API Endpoints
 
@@ -38,7 +43,7 @@ cd order-service && mvn spring-boot:run
 | Method | Endpoint      | Description     |
 |--------|---------------|-----------------|
 | POST   | /users        | Create user     |
-| PUT   | /users/{id}    | Update user     |
+| PUT    | /users/{id}    | Update user     |
 | GET    | /users/{id}   | Get user by ID  |
 | GET    | /users        | Get all users   |
 
@@ -65,7 +70,7 @@ cd order-service && mvn spring-boot:run
 
 ✅ Service-to-service communication via OpenFeign
 
-🚧 Eureka Service Discovery
+✅ Eureka Service Discovery
 
 🚧 API Gateway (Spring Cloud Gateway)
 
