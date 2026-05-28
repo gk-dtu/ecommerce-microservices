@@ -24,7 +24,7 @@ public class GlobalExceptionHandler {
         );
         return new ResponseEntity<>(
                 response,
-                HttpStatus.BAD_REQUEST
+                HttpStatus.NOT_FOUND
         );
     }
 
@@ -71,6 +71,23 @@ public class GlobalExceptionHandler {
         return new ResponseEntity<>(
                 error,
                 HttpStatus.NOT_FOUND
+        );
+    }
+
+    @ExceptionHandler(ServiceUnavailableException.class)
+    @ResponseStatus(HttpStatus.SERVICE_UNAVAILABLE)
+    public ResponseEntity<ErrorResponse> handleServiceUnavailable(ServiceUnavailableException ex) {
+        ErrorResponse error = new ErrorResponse(
+                LocalDateTime.now(),
+                503,
+                "SERVICE_UNAVAILABLE",
+                ex.getMessage(),
+                null
+        );
+
+        return new ResponseEntity<>(
+                error,
+                HttpStatus.SERVICE_UNAVAILABLE
         );
     }
 }

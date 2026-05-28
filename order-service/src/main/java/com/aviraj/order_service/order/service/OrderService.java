@@ -20,21 +20,13 @@ import org.springframework.stereotype.Service;
 import java.util.List;
 
 @Service
-//@RequiredArgsConstructor
+@RequiredArgsConstructor
 public class OrderService {
 
     private final OrderRepository orderRepo;
     private final OrderMapper orderMapper;
-    private final UserClient userClient;
-    private final ProductClient productClient;
+    private final OrderFeignService orderFeignService;
     private final Logger logger = LoggerFactory.getLogger(OrderService.class);
-
-    public OrderService(OrderRepository orderRepo, OrderMapper orderMapper, UserClient userClient, ProductClient productClient){
-        this.orderRepo = orderRepo;
-        this.orderMapper = orderMapper;
-        this.userClient = userClient;
-        this.productClient = productClient;
-    }
 
     @Transactional
     public OrderResponseDto placeOrder(OrderRequestDto dto) {
@@ -44,14 +36,14 @@ public class OrderService {
         ProductResponseDto product;
         // 🔥 Validate user via user-service
         try{
-            user = userClient.getUserById(dto.getUserId());
+            user = orderFeignService.getUser(dto.getUserId());
         }catch (FeignException.NotFound e){
             throw new ResourceNotFoundException("User not found with id: " + dto.getUserId());
         }
         // 🔥 Validate product via product-service
 
         try{
-            product = productClient.getProductById(dto.getProductId());
+            product = orderFeignService.getProduct(dto.getProductId());
         }catch (FeignException.NotFound e){
             throw new ResourceNotFoundException("Product not found with id: " + dto.getProductId());
         }
