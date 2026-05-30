@@ -56,3 +56,10 @@ Thumbs.db
 # Env files
 # ========================
 .env
+# Docker
+.docker/
+*.dockerignore
+docker-compose.override.yml
+
+# WSL artifacts  
+.wslconfig

@@ -1,0 +1,120 @@
+version: '3.8'
+
+# ══════════════════════════════════════════════════════════════════
+#  ECOMMERCE MICROSERVICES — Docker Compose
+#
+#  Startup order:
+#  discovery-server → (api-gateway, user, product, order) together
+#
+#  All services share "ecommerce-net" bridge network
+#  Containers find each other by container NAME not IP
+#  (IPs change on restart, names don't)
+# ══════════════════════════════════════════════════════════════════
+
+services:
+
+  # ─────────────────────────────────────────────────────────────
+  # 1. DISCOVERY SERVER (Eureka)
+  #    Starts FIRST — everyone registers here
+  # ─────────────────────────────────────────────────────────────
+  discovery-server:
+    build:
+      context: ./discovery-server
+      dockerfile: Dockerfile
+    container_name: discovery-server
+    ports:
+      - "8761:8761"       # host:container
+    networks:
+      - ecommerce-net
+    healthcheck:
+      # Docker pings this every 15s
+      # Only marks healthy when response contains "UP"
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8761/actuator/health | grep -c UP || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 40s   # give Spring Boot 40s before first check
+
+  # ─────────────────────────────────────────────────────────────
+  # 2. API GATEWAY
+  #    Single entry point for all client requests
+  # ─────────────────────────────────────────────────────────────
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    container_name: api-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      # Override localhost → discovery-server (Docker container name)
+      # This is how containers find Eureka inside Docker network
+      - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://discovery-server:8761/eureka/
+    depends_on:
+      discovery-server:
+        condition: service_healthy   # waits for Eureka to be UP
+    networks:
+      - ecommerce-net
+
+  # ─────────────────────────────────────────────────────────────
+  # 3. USER SERVICE
+  # ─────────────────────────────────────────────────────────────
+  user-service:
+    build:
+      context: ./user-service
+      dockerfile: Dockerfile
+    container_name: user-service
+    ports:
+      - "8081:8081"
+    environment:
+      - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://discovery-server:8761/eureka/
+    depends_on:
+      discovery-server:
+        condition: service_healthy
+    networks:
+      - ecommerce-net
+
+  # ─────────────────────────────────────────────────────────────
+  # 4. PRODUCT SERVICE
+  # ─────────────────────────────────────────────────────────────
+  product-service:
+    build:
+      context: ./product-service
+      dockerfile: Dockerfile
+    container_name: product-service
+    ports:
+      - "8082:8082"
+    environment:
+      - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://discovery-server:8761/eureka/
+    depends_on:
+      discovery-server:
+        condition: service_healthy
+    networks:
+      - ecommerce-net
+
+  # ─────────────────────────────────────────────────────────────
+  # 5. ORDER SERVICE
+  # ─────────────────────────────────────────────────────────────
+  order-service:
+    build:
+      context: ./order-service
+      dockerfile: Dockerfile
+    container_name: order-service
+    ports:
+      - "8083:8083"
+    environment:
+      - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://discovery-server:8761/eureka/
+    depends_on:
+      discovery-server:
+        condition: service_healthy
+    networks:
+      - ecommerce-net
+
+# ─────────────────────────────────────────────────────────────────
+# NETWORK
+# bridge = private network on your machine
+# containers talk to each other by name, isolated from outside
+# ─────────────────────────────────────────────────────────────────
+networks:
+  ecommerce-net:
+    driver: bridge
