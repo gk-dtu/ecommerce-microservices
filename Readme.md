@@ -1,6 +1,6 @@
 # Ecommerce Microservices
 
-A production-style Spring Boot microservices backend with independent User, Product, and Order services featuring service discovery, API Gateway, circuit breakers, and full Docker containerization.
+A production-style Spring Boot microservices backend with independent User, Product, and Order services featuring service discovery, API Gateway, circuit breakers, Docker containerization, and PostgreSQL persistence.
 
 ## Tech Stack
 
@@ -10,7 +10,8 @@ A production-style Spring Boot microservices backend with independent User, Prod
 - Spring Cloud Gateway (API gateway)
 - Resilience4j (circuit breaker, retry, timeout)
 - Spring Data JPA + Hibernate
-- H2 In-memory Database
+- PostgreSQL 16 (production database)
+- H2 In-memory Database (local development only)
 - Spring Boot Actuator (health checks)
 - Docker + Docker Compose (containerization)
 - Maven
@@ -33,17 +34,27 @@ A production-style Spring Boot microservices backend with independent User, Prod
 - Docker Engine
 - Docker Compose v2+
 
-### Start all 5 services with one command
+### Start all 6 containers with one command
 
 ```bash
 docker compose up --build
 ```
 
 Docker Compose handles everything automatically:
-- Builds all 5 service images using multi-stage builds
-- Starts discovery-server first and waits for it to be healthy
+- Starts PostgreSQL first and waits for it to be healthy
+- Creates 3 separate databases (userdb, productdb, orderdb)
+- Starts Eureka discovery-server next and waits for it to be healthy
 - Starts remaining 4 services only after Eureka is ready
-- Connects all services on a private bridge network
+- Connects all containers on a private bridge network (ecommerce-net)
+
+### Startup order
+
+```
+postgres → discovery-server → api-gateway
+                            → user-service
+                            → product-service
+                            → order-service
+```
 
 ### Verify everything is running
 
@@ -52,6 +63,39 @@ Docker Compose handles everything automatically:
 | http://localhost:8761 | Eureka dashboard — all 4 services registered |
 | http://localhost:8081/actuator/health | `{"status":"UP"}` |
 | http://localhost:8080/users | Response from user-service via gateway |
+
+### Test data persistence (proof PostgreSQL is working)
+
+```bash
+# Create a user
+curl -X POST http://localhost:8080/users \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Aviraj", "email": "aviraj@gmail.com"}'
+
+# Stop all containers — data should survive this
+docker compose down
+
+# Start again (no --build needed)
+docker compose up
+
+# Data is still there
+curl http://localhost:8080/users
+```
+
+With H2, data would be gone. With PostgreSQL + Docker volume, data persists forever.
+
+### Inspect database directly
+
+```bash
+# Open PostgreSQL shell
+docker exec -it postgres psql -U aviraj -d userdb
+
+# Inside psql
+\dt                  -- list all tables
+SELECT * FROM users; -- see your data
+\l                   -- list all databases
+\q                   -- quit
+```
 
 ### Useful Docker commands
 
@@ -65,10 +109,13 @@ docker compose logs -f order-service
 # Restart a single service
 docker compose restart user-service
 
-# Stop all containers
+# Stop all containers (data preserved in volume)
 docker compose down
 
-# Full clean rebuild (when something is broken)
+# Stop and delete all data (full reset)
+docker compose down -v
+
+# Full clean rebuild
 docker compose down && docker compose up --build
 ```
 
@@ -76,22 +123,42 @@ docker compose down && docker compose up --build
 
 ## Running Locally (Without Docker)
 
-Start services in this order:
+Uses H2 in-memory database — no PostgreSQL setup needed.
 
 ```bash
 # 1. Eureka Server must start first
 cd discovery-server && mvn spring-boot:run
 
 # 2. Start user and product services
-cd user-service && mvn spring-boot:run
-cd product-service && mvn spring-boot:run
+cd user-service && mvn spring-boot:run -Dspring-boot.run.profiles=local
+cd product-service && mvn spring-boot:run -Dspring-boot.run.profiles=local
 
 # 3. Start order service
-cd order-service && mvn spring-boot:run
+cd order-service && mvn spring-boot:run -Dspring-boot.run.profiles=local
 
 # 4. Start API Gateway last
 cd api-gateway && mvn spring-boot:run
 ```
+
+---
+
+## Spring Profiles
+
+Each data service has 3 property files:
+
+| File | Active when | Database |
+|------|-------------|----------|
+| `application.properties` | Always | Common config (port, eureka, resilience4j) |
+| `application-local.properties` | `local` profile | H2 in-memory |
+| `application-docker.properties` | `docker` profile | PostgreSQL |
+
+Profile is set via environment variable in docker-compose.yml:
+```yaml
+environment:
+  - SPRING_PROFILES_ACTIVE=docker
+```
+
+This is the 12-factor app principle — same codebase, different config per environment.
 
 ---
 
@@ -149,20 +216,27 @@ service   service    service
 :8081     :8082      :8083
 ```
 
-### Docker Network Architecture
+### Docker + Database Architecture
 
 ```
 Host Machine
 │
 └── ecommerce-net (bridge network)
-    ├── discovery-server  (container name = hostname)
-    ├── api-gateway       (resolves discovery-server:8761)
-    ├── user-service      (resolves discovery-server:8761)
-    ├── product-service   (resolves discovery-server:8761)
-    └── order-service     (resolves discovery-server:8761)
+    │
+    ├── postgres :5432
+    │     ├── userdb     (owned by user-service)
+    │     ├── productdb  (owned by product-service)
+    │     └── orderdb    (owned by order-service)
+    │
+    ├── discovery-server :8761
+    ├── api-gateway      :8080
+    ├── user-service     :8081  ──→ postgres:5432/userdb
+    ├── product-service  :8082  ──→ postgres:5432/productdb
+    └── order-service    :8083  ──→ postgres:5432/orderdb
 
 Containers communicate by name, not IP.
-Only gateway (:8080) and Eureka (:8761) exposed to host.
+Data stored in Docker named volume: postgres-data
+Volume survives docker compose down — data never lost.
 ```
 
 ---
@@ -173,13 +247,13 @@ Only gateway (:8080) and Eureka (:8761) exposed to host.
 
 ```
 Stage 1 (builder) — maven:3.9.6-eclipse-temurin-17
-  ├── Copies pom.xml first (layer cache for dependencies)
+  ├── Copies pom.xml first (layer cache — deps not re-downloaded unless pom changes)
   ├── Downloads all Maven dependencies
   └── Builds jar with mvn package -DskipTests
 
 Stage 2 (runtime) — eclipse-temurin:17-jre-alpine
   ├── Minimal JRE-only image (~120MB vs ~500MB)
-  ├── Non-root user for security
+  ├── Non-root user for container security
   └── Copies only the jar from Stage 1
 ```
 
@@ -188,12 +262,27 @@ Stage 2 (runtime) — eclipse-temurin:17-jre-alpine
 ```
 docker compose up
   │
-  ├── Starts discovery-server
-  │     └── Polls /actuator/health every 15s
-  │           Waits for {"status":"UP"}
+  ├── Starts postgres
+  │     └── Polls pg_isready every 10s
+  │           init-db.sh creates userdb, productdb, orderdb
   │
-  └── Only then starts all 4 remaining services
-        (guaranteed Eureka is ready before registration)
+  ├── Starts discovery-server (after postgres healthy)
+  │     └── Polls /actuator/health every 15s
+  │
+  └── Starts all 4 services (after Eureka healthy)
+        Guaranteed correct startup order every time
+```
+
+### Database per Service Pattern
+
+Each microservice owns its own database — a core microservices principle:
+
+```
+user-service    → userdb     (no other service touches this)
+product-service → productdb  (no other service touches this)
+order-service   → orderdb    (no other service touches this)
+
+Services share data only via REST APIs — never via shared DB
 ```
 
 ---
@@ -220,9 +309,9 @@ docker compose up
 ✅ Resilience4j (Circuit Breaker + Retry + Timeout + Fallback)  
 ✅ Docker containerization (multi-stage builds, health checks)  
 ✅ Docker Compose orchestration (startup ordering, bridge network)  
-🚧 PostgreSQL (replacing H2)  
+✅ PostgreSQL migration (Spring profiles, Database per Service, volume persistence)  
 🚧 JWT Security at Gateway level  
 🚧 Unit + Integration Tests  
 🚧 Kafka (async order events)  
 🚧 Distributed Tracing (Zipkin)  
-🚧 CI/CD (GitHub Actions)
+🚧 CI/CD (GitHub Actions)  
