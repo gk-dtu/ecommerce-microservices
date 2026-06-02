@@ -4,18 +4,41 @@ version: '3.8'
 #  ECOMMERCE MICROSERVICES — Docker Compose
 #
 #  Startup order:
-#  discovery-server → (api-gateway, user, product, order) together
+#  postgres → discovery-server → (all other services)
 #
+#  Spring Profile "docker" activates PostgreSQL config
 #  All services share "ecommerce-net" bridge network
-#  Containers find each other by container NAME not IP
-#  (IPs change on restart, names don't)
 # ══════════════════════════════════════════════════════════════════
 
 services:
 
   # ─────────────────────────────────────────────────────────────
-  # 1. DISCOVERY SERVER (Eureka)
-  #    Starts FIRST — everyone registers here
+  # 1. POSTGRESQL DATABASE
+  #    Starts first — services depend on it
+  # ─────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: aviraj
+      POSTGRES_PASSWORD: aviraj123
+      POSTGRES_MULTIPLE_DATABASES: userdb,productdb,orderdb
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
+    networks:
+      - ecommerce-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aviraj"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 20s
+
+  # ─────────────────────────────────────────────────────────────
+  # 2. DISCOVERY SERVER (Eureka)
   # ─────────────────────────────────────────────────────────────
   discovery-server:
     build:
@@ -23,21 +46,23 @@ services:
       dockerfile: Dockerfile
     container_name: discovery-server
     ports:
-      - "8761:8761"       # host:container
+      - "8761:8761"
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
     networks:
       - ecommerce-net
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
-      # Docker pings this every 15s
-      # Only marks healthy when response contains "UP"
       test: ["CMD-SHELL", "wget -qO- http://localhost:8761/actuator/health | grep -c UP || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 8
-      start_period: 40s   # give Spring Boot 40s before first check
+      start_period: 40s
 
   # ─────────────────────────────────────────────────────────────
-  # 2. API GATEWAY
-  #    Single entry point for all client requests
+  # 3. API GATEWAY
   # ─────────────────────────────────────────────────────────────
   api-gateway:
     build:
@@ -47,17 +72,16 @@ services:
     ports:
       - "8080:8080"
     environment:
-      # Override localhost → discovery-server (Docker container name)
-      # This is how containers find Eureka inside Docker network
+      - SPRING_PROFILES_ACTIVE=docker
       - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://discovery-server:8761/eureka/
     depends_on:
       discovery-server:
-        condition: service_healthy   # waits for Eureka to be UP
+        condition: service_healthy
     networks:
       - ecommerce-net
 
   # ─────────────────────────────────────────────────────────────
-  # 3. USER SERVICE
+  # 4. USER SERVICE
   # ─────────────────────────────────────────────────────────────
   user-service:
     build:
@@ -67,15 +91,18 @@ services:
     ports:
       - "8081:8081"
     environment:
+      - SPRING_PROFILES_ACTIVE=docker
       - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://discovery-server:8761/eureka/
     depends_on:
       discovery-server:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     networks:
       - ecommerce-net
 
   # ─────────────────────────────────────────────────────────────
-  # 4. PRODUCT SERVICE
+  # 5. PRODUCT SERVICE
   # ─────────────────────────────────────────────────────────────
   product-service:
     build:
@@ -85,15 +112,18 @@ services:
     ports:
       - "8082:8082"
     environment:
+      - SPRING_PROFILES_ACTIVE=docker
       - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://discovery-server:8761/eureka/
     depends_on:
       discovery-server:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     networks:
       - ecommerce-net
 
   # ─────────────────────────────────────────────────────────────
-  # 5. ORDER SERVICE
+  # 6. ORDER SERVICE
   # ─────────────────────────────────────────────────────────────
   order-service:
     build:
@@ -103,18 +133,27 @@ services:
     ports:
       - "8083:8083"
     environment:
+      - SPRING_PROFILES_ACTIVE=docker
       - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://discovery-server:8761/eureka/
     depends_on:
       discovery-server:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     networks:
       - ecommerce-net
 
 # ─────────────────────────────────────────────────────────────────
 # NETWORK
-# bridge = private network on your machine
-# containers talk to each other by name, isolated from outside
 # ─────────────────────────────────────────────────────────────────
 networks:
   ecommerce-net:
     driver: bridge
+
+# ─────────────────────────────────────────────────────────────────
+# VOLUMES
+# postgres-data persists your database even after container stops
+# Without this, all data lost on docker compose down
+# ─────────────────────────────────────────────────────────────────
+volumes:
+  postgres-data:
