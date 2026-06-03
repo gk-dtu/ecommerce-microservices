@@ -188,6 +188,39 @@ SELECT * FROM users;
 \q
 ```
 
+### Test data persistence (proof PostgreSQL is working)
+
+```bash
+# Create a user
+curl -X POST http://localhost:8080/users \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Aviraj", "email": "aviraj@gmail.com"}'
+
+# Stop all containers — data should survive this
+docker compose down
+
+# Start again (no --build needed)
+docker compose up
+
+# Data is still there
+curl http://localhost:8080/users
+```
+
+With H2, data would be gone. With PostgreSQL + Docker volume, data persists forever.
+
+### Inspect database directly
+
+```bash
+# Open PostgreSQL shell
+docker exec -it postgres psql -U aviraj -d userdb
+
+# Inside psql
+\dt                  -- list all tables
+SELECT * FROM users; -- see your data
+\l                   -- list all databases
+\q                   -- quit
+```
+
 ### Useful Docker commands
 
 ```bash
@@ -249,6 +282,26 @@ environment:
 ```
 
 This follows the **12-factor app** principle — same codebase, config varies per environment.
+
+---
+
+## Spring Profiles
+
+Each data service has 3 property files:
+
+| File | Active when | Database |
+|------|-------------|----------|
+| `application.properties` | Always | Common config (port, eureka, resilience4j) |
+| `application-local.properties` | `local` profile | H2 in-memory |
+| `application-docker.properties` | `docker` profile | PostgreSQL |
+
+Profile is set via environment variable in docker-compose.yml:
+```yaml
+environment:
+  - SPRING_PROFILES_ACTIVE=docker
+```
+
+This is the 12-factor app principle — same codebase, different config per environment.
 
 ---
 
@@ -399,4 +452,4 @@ docker compose up
 🚧 Unit + Integration Tests  
 🚧 Kafka (async order events)  
 🚧 Distributed Tracing (Zipkin)  
-🚧 CI/CD (GitHub Actions)
+🚧 CI/CD (GitHub Actions)  
