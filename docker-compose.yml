@@ -22,8 +22,8 @@ services:
     ports:
       - "5432:5432"
     environment:
-      POSTGRES_USER: aviraj
-      POSTGRES_PASSWORD: aviraj123
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_MULTIPLE_DATABASES: userdb,productdb,orderdb
     volumes:
       - postgres-data:/var/lib/postgresql/data
@@ -31,7 +31,7 @@ services:
     networks:
       - ecommerce-net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U aviraj"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
       interval: 10s
       timeout: 5s
       retries: 8
@@ -76,12 +76,15 @@ services:
       - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://discovery-server:8761/eureka/
       - JWT_SECRET=${JWT_SECRET}
       - JWT_EXPIRATION=${JWT_EXPIRATION}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     depends_on:
       discovery-server:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
     networks:
       - ecommerce-net
-
   # ─────────────────────────────────────────────────────────────
   # 4. USER SERVICE
   # ─────────────────────────────────────────────────────────────
@@ -95,6 +98,8 @@ services:
     environment:
       - SPRING_PROFILES_ACTIVE=docker
       - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://discovery-server:8761/eureka/
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     depends_on:
       discovery-server:
         condition: service_healthy
@@ -116,6 +121,8 @@ services:
     environment:
       - SPRING_PROFILES_ACTIVE=docker
       - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://discovery-server:8761/eureka/
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     depends_on:
       discovery-server:
         condition: service_healthy
@@ -137,6 +144,8 @@ services:
     environment:
       - SPRING_PROFILES_ACTIVE=docker
       - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://discovery-server:8761/eureka/
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     depends_on:
       discovery-server:
         condition: service_healthy
