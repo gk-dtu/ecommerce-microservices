@@ -1,6 +1,6 @@
 # Ecommerce Microservices
 
-A production-style Spring Boot microservices backend with independent User, Product, and Order services featuring service discovery, API Gateway, circuit breakers, Docker containerization, PostgreSQL persistence, and JWT security.
+A production-style Spring Boot microservices backend with independent User, Product, and Order services featuring service discovery, API Gateway, circuit breakers, Docker containerization, PostgreSQL persistence, JWT security, and Kafka async event streaming.
 
 ## Tech Stack
 
@@ -16,18 +16,98 @@ A production-style Spring Boot microservices backend with independent User, Prod
 - Spring Security (WebFlux reactive)
 - JWT (JSON Web Token) — HS256 via JJWT 0.12.3
 - BCrypt (password hashing, strength 12)
+- Apache Kafka 3.6.2 (async event streaming, KRaft mode)
 - Docker + Docker Compose (containerization)
 - Maven
 
 ## Services
 
-| Service          | Port | Responsibility                                        |
-|------------------|------|-------------------------------------------------------|
-| discovery-server | 8761 | Eureka service registry                               |
-| api-gateway      | 8080 | Single entry point, JWT validation, auth endpoints    |
-| user-service     | 8081 | User registration and management                      |
-| product-service  | 8082 | Product catalog and inventory                         |
-| order-service    | 8083 | Order placement, validates user and product via Feign |
+| Service          | Port | Responsibility                                                |
+|------------------|------|---------------------------------------------------------------|
+| discovery-server | 8761 | Eureka service registry                                       |
+| api-gateway      | 8080 | Single entry point, JWT validation, auth endpoints            |
+| user-service     | 8081 | User registration and management                              |
+| product-service  | 8082 | Product catalog and inventory                                 |
+| order-service    | 8083 | Order placement, validates user/product, publishes Kafka event|
+
+---
+
+## Event-Driven Architecture (Kafka)
+
+### Flow
+
+```
+POST /orders
+     ↓
+order-service validates user + product (Feign)
+     ↓
+saves order to orderdb (PostgreSQL)
+     ↓
+publishes OrderPlacedEvent to Kafka topic "order.placed"
+     ↓ (async — different thread)
+OrderEventConsumer processes event
+     ↓
+future: notification-service, inventory-service consume same event
+        without any change to order-service
+```
+
+### Why async after DB save?
+
+```
+WRONG order:
+1. publish event → 2. save to DB (if DB fails → event exists but no order = inconsistency)
+
+CORRECT order (what we do):
+1. save to DB ✅ → 2. publish event
+If Kafka fails → order still saved, error logged, retry possible
+```
+
+### OrderPlacedEvent payload
+
+```json
+{
+  "eventId": "uuid-unique-per-event",
+  "eventTime": "2026-06-04T11:20:45",
+  "orderId": 3,
+  "userId": 2,
+  "productId": 2,
+  "quantity": 10,
+  "totalAmount": 1005000.0,
+  "status": "PLACED",
+  "placedBy": "aviraj"
+}
+```
+
+### Kafka Setup (KRaft mode — no Zookeeper)
+
+```
+Topic:      order.placed
+Partitions: 3 (parallel consumption ready)
+Replicas:   1 (single broker setup)
+Mode:       KRaft (Zookeeper-free, Kafka 3.3+)
+
+Producer thread: [nio-8083-exec-1]  → HTTP request thread
+Consumer thread: [ntainer#0-0-C-1]  → separate async thread
+Truly decoupled — producer never waits for consumer
+```
+
+### Verify Kafka topics
+
+```bash
+docker exec -it kafka kafka-topics \
+  --bootstrap-server localhost:9092 \
+  --list
+```
+
+### userId vs placedBy
+
+```
+userId   = business entity (whose order) — from request body
+placedBy = authenticated identity (who is logged in) — from JWT X-User-Name header
+
+Used for audit trail and fraud detection:
+Same userId, different placedBy → suspicious activity 🚨
+```
 
 ---
 
@@ -46,7 +126,7 @@ PROTECTED REQUEST:
 GET /users
 Authorization: Bearer <token>
 → JwtAuthFilter validates token → extracts username
-→ adds X-User-Name header → forwards to user-service ✅
+→ adds X-User-Name header → forwards to service ✅
 
 INVALID/MISSING TOKEN:
 → 401 Unauthorized (missing/malformed)
@@ -55,11 +135,11 @@ INVALID/MISSING TOKEN:
 
 ### Auth Endpoints (public — no token needed)
 
-| Method | Endpoint         | Description                        |
-|--------|------------------|------------------------------------|
-| POST   | /auth/register   | Create account (returns 201)       |
-| POST   | /auth/login      | Login and get JWT token            |
-| GET    | /auth/validate   | Validate token (debug utility)     |
+| Method | Endpoint       | Description                  |
+|--------|----------------|------------------------------|
+| POST   | /auth/register | Create account (returns 201) |
+| POST   | /auth/login    | Login and get JWT token      |
+| GET    | /auth/validate | Validate token (debug)       |
 
 ### Protected Endpoints (JWT required)
 
@@ -68,7 +148,7 @@ All `/users/**`, `/products/**`, `/orders/**` require:
 Authorization: Bearer <your-jwt-token>
 ```
 
-### Quick Test
+### Quick Auth Test
 
 ```bash
 # 1. Register
@@ -76,46 +156,19 @@ curl -X POST http://localhost:8080/auth/register \
   -H "Content-Type: application/json" \
   -d '{"username": "aviraj", "password": "pass123"}'
 
-# 2. Login — copy the token from response
+# 2. Login — copy token from response
 curl -X POST http://localhost:8080/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username": "aviraj", "password": "pass123"}'
 
-# 3. Use token for protected routes
-curl http://localhost:8080/users \
-  -H "Authorization: Bearer <token>"
+# 3. Place order — triggers Kafka event
+curl -X POST http://localhost:8080/orders \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <token>" \
+  -d '{"userId": 1, "productId": 1, "quantity": 2}'
 
-# 4. No token → 401
-curl http://localhost:8080/users
-
-# 5. Fake token → 403
-curl http://localhost:8080/users \
-  -H "Authorization: Bearer faketoken123"
-```
-
-### Security Implementation Details
-
-```
-JWT:
-→ Algorithm: HS256 (HMAC + SHA-256)
-→ Secret: externalized to environment variable (never in code)
-→ Expiry: 24 hours (configurable via JWT_EXPIRATION)
-→ Payload: username, issued-at, expiry
-
-BCrypt:
-→ Strength: 12 (industry recommended)
-→ Salt: auto-generated, embedded in hash
-→ Same password → different hash every time (rainbow tables useless)
-
-Gateway Filter:
-→ GlobalFilter runs at order -1 (first filter)
-→ Public routes: /auth/**, /actuator/**
-→ Protected routes: everything else
-→ Identity propagation: X-User-Name header to downstream services
-
-Database per Service:
-→ authdb: user credentials (username + bcrypt hash + role)
-→ Individual services never access authdb
+# 4. Watch Kafka event in logs
+docker compose logs -f order-service
 ```
 
 ---
@@ -129,11 +182,11 @@ Database per Service:
 ### Setup environment variables
 
 ```bash
-# Copy example and fill in values
 cp .env.example .env
+# fill in values
 ```
 
-`.env` file (gitignored — never committed):
+`.env` file (gitignored):
 ```
 JWT_SECRET=your-super-secret-key-minimum-32-characters
 JWT_EXPIRATION=86400000
@@ -142,83 +195,52 @@ POSTGRES_PASSWORD=your-db-password
 POSTGRES_DB=postgres
 ```
 
-### Start all 7 containers with one command
+### Start all 8 containers with one command
 
 ```bash
 docker compose up --build
 ```
 
-Docker Compose handles everything automatically:
-- Starts PostgreSQL first and waits for it to be healthy
-- Creates 4 separate databases (userdb, productdb, orderdb, authdb)
-- Starts Eureka discovery-server next
-- Starts remaining 4 services only after Eureka is ready
-- All secrets injected via environment variables — zero hardcoded credentials
+Containers started:
+- postgres (PostgreSQL 16)
+- kafka (KRaft mode, no Zookeeper)
+- discovery-server (Eureka)
+- api-gateway
+- user-service
+- product-service
+- order-service
 
 ### Startup order
 
 ```
-postgres → discovery-server → api-gateway
-                            → user-service
-                            → product-service
-                            → order-service
+postgres + kafka → discovery-server → api-gateway
+                                    → user-service
+                                    → product-service
+                                    → order-service (depends on kafka too)
 ```
 
 ### Verify everything is running
 
 | URL | What you should see |
 |-----|---------------------|
-| http://localhost:8761 | Eureka dashboard — all 4 services registered |
+| http://localhost:8761 | Eureka — all 4 services registered |
 | http://localhost:8081/actuator/health | `{"status":"UP"}` |
 | POST http://localhost:8080/auth/register | 201 Created |
 | POST http://localhost:8080/auth/login | JWT token |
+| POST http://localhost:8080/orders + token | Order created + Kafka event in logs |
 
 ### Inspect databases directly
 
 ```bash
 # Auth database
 docker exec -it postgres psql -U $POSTGRES_USER -d authdb
-\dt                          -- shows user_credentials table
 SELECT username, role FROM user_credentials;
 \q
 
-# User database
-docker exec -it postgres psql -U $POSTGRES_USER -d userdb
-SELECT * FROM users;
+# Order database
+docker exec -it postgres psql -U $POSTGRES_USER -d orderdb
+SELECT * FROM orders;
 \q
-```
-
-### Test data persistence (proof PostgreSQL is working)
-
-```bash
-# Create a user
-curl -X POST http://localhost:8080/users \
-  -H "Content-Type: application/json" \
-  -d '{"name": "Aviraj", "email": "aviraj@gmail.com"}'
-
-# Stop all containers — data should survive this
-docker compose down
-
-# Start again (no --build needed)
-docker compose up
-
-# Data is still there
-curl http://localhost:8080/users
-```
-
-With H2, data would be gone. With PostgreSQL + Docker volume, data persists forever.
-
-### Inspect database directly
-
-```bash
-# Open PostgreSQL shell
-docker exec -it postgres psql -U aviraj -d userdb
-
-# Inside psql
-\dt                  -- list all tables
-SELECT * FROM users; -- see your data
-\l                   -- list all databases
-\q                   -- quit
 ```
 
 ### Useful Docker commands
@@ -227,13 +249,13 @@ SELECT * FROM users; -- see your data
 # Run in background
 docker compose up --build -d
 
+# Watch Kafka events
+docker compose logs -f order-service
+
 # View logs of specific service
 docker compose logs -f api-gateway
 
-# Restart single service
-docker compose restart api-gateway
-
-# Stop all containers (data preserved)
+# Stop all (data preserved)
 docker compose down
 
 # Full reset including data
@@ -247,7 +269,7 @@ docker compose down && docker compose up --build
 
 ## Running Locally (Without Docker)
 
-Uses H2 in-memory database — no PostgreSQL setup needed.
+Uses H2 in-memory database. Kafka not available locally — only in Docker.
 
 ```bash
 # 1. Eureka Server
@@ -258,7 +280,7 @@ cd user-service && mvn spring-boot:run -Dspring-boot.run.profiles=local
 cd product-service && mvn spring-boot:run -Dspring-boot.run.profiles=local
 cd order-service && mvn spring-boot:run -Dspring-boot.run.profiles=local
 
-# 3. API Gateway (set env vars first)
+# 3. API Gateway
 export JWT_SECRET=any-local-secret-key-minimum-32-chars
 cd api-gateway && mvn spring-boot:run -Dspring-boot.run.profiles=local
 ```
@@ -269,52 +291,26 @@ cd api-gateway && mvn spring-boot:run -Dspring-boot.run.profiles=local
 
 Every service has 3 property files:
 
-| File | Active when | Database |
-|------|-------------|----------|
-| `application.properties` | Always | Common config (port, eureka, resilience4j, jwt) |
-| `application-local.properties` | `local` profile | H2 in-memory |
-| `application-docker.properties` | `docker` profile | PostgreSQL |
+| File | Active when | Database | Kafka |
+|------|-------------|----------|-------|
+| `application.properties` | Always | Common config | None |
+| `application-local.properties` | `local` profile | H2 in-memory | Disabled |
+| `application-docker.properties` | `docker` profile | PostgreSQL | kafka:9092 |
 
-Profile activated via docker-compose.yml:
-```yaml
-environment:
-  - SPRING_PROFILES_ACTIVE=docker
-```
-
-This follows the **12-factor app** principle — same codebase, config varies per environment.
-
----
-
-## Spring Profiles
-
-Each data service has 3 property files:
-
-| File | Active when | Database |
-|------|-------------|----------|
-| `application.properties` | Always | Common config (port, eureka, resilience4j) |
-| `application-local.properties` | `local` profile | H2 in-memory |
-| `application-docker.properties` | `docker` profile | PostgreSQL |
-
-Profile is set via environment variable in docker-compose.yml:
-```yaml
-environment:
-  - SPRING_PROFILES_ACTIVE=docker
-```
-
-This is the 12-factor app principle — same codebase, different config per environment.
+Kafka config exists ONLY in `application-docker.properties` — Spring does not auto-configure Kafka when bootstrap-servers is absent. Local profile runs cleanly without Kafka.
 
 ---
 
 ## API Endpoints
 
-All requests go through the API Gateway at `http://localhost:8080`
+All requests go through API Gateway at `http://localhost:8080`
 
 ### Auth (public)
-| Method | Endpoint          | Description              | Auth Required |
-|--------|-------------------|--------------------------|---------------|
-| POST   | /auth/register    | Create account           | No            |
-| POST   | /auth/login       | Login, get JWT token     | No            |
-| GET    | /auth/validate    | Validate token           | No            |
+| Method | Endpoint        | Description          | Auth Required |
+|--------|-----------------|----------------------|---------------|
+| POST   | /auth/register  | Create account       | No            |
+| POST   | /auth/login     | Login, get JWT token | No            |
+| GET    | /auth/validate  | Validate token       | No            |
 
 ### User Service
 | Method | Endpoint      | Description    | Auth Required |
@@ -325,18 +321,18 @@ All requests go through the API Gateway at `http://localhost:8080`
 | GET    | /users        | Get all users  | Yes           |
 
 ### Product Service
-| Method | Endpoint         | Description       | Auth Required |
-|--------|------------------|-------------------|---------------|
-| POST   | /products        | Create product    | Yes           |
-| GET    | /products/{id}   | Get product by ID | Yes           |
-| GET    | /products        | Get all products  | Yes           |
+| Method | Endpoint        | Description       | Auth Required |
+|--------|-----------------|-------------------|---------------|
+| POST   | /products       | Create product    | Yes           |
+| GET    | /products/{id}  | Get product by ID | Yes           |
+| GET    | /products       | Get all products  | Yes           |
 
 ### Order Service
-| Method | Endpoint       | Description                               | Auth Required |
-|--------|----------------|-------------------------------------------|---------------|
-| POST   | /orders        | Place order (validates user and product)  | Yes           |
-| GET    | /orders/{id}   | Get order by ID                           | Yes           |
-| GET    | /orders        | Get all orders                            | Yes           |
+| Method | Endpoint      | Description                              | Auth Required |
+|--------|---------------|------------------------------------------|---------------|
+| POST   | /orders       | Place order → publishes Kafka event      | Yes           |
+| GET    | /orders/{id}  | Get order by ID                          | Yes           |
+| GET    | /orders       | Get all orders                           | Yes           |
 
 ---
 
@@ -347,7 +343,6 @@ All requests go through the API Gateway at `http://localhost:8080`
                     │   discovery-server  │
                     │      :8761          │
                     └──────────┬──────────┘
-                               │ (all services register here)
                                │
               ┌────────────────┴────────────────┐
               │                                 │
@@ -363,6 +358,25 @@ All requests go through the API Gateway at `http://localhost:8080`
 /users/**  /products/** /orders/**
 ```
 
+### Event-Driven Flow
+
+```
+order-service
+     │
+     ├──→ orderdb (PostgreSQL) — save order
+     │
+     └──→ kafka:9092
+              │
+              └──→ topic: order.placed (3 partitions)
+                        │
+                        └──→ OrderEventConsumer (async thread)
+                                  │
+                             future consumers:
+                             notification-service
+                             inventory-service
+                             analytics-service
+```
+
 ### Docker + Database Architecture
 
 ```
@@ -371,20 +385,23 @@ Host Machine
 └── ecommerce-net (bridge network)
     │
     ├── postgres :5432
-    │     ├── authdb     (owned by api-gateway — credentials)
-    │     ├── userdb     (owned by user-service)
-    │     ├── productdb  (owned by product-service)
-    │     └── orderdb    (owned by order-service)
+    │     ├── authdb     (api-gateway — credentials)
+    │     ├── userdb     (user-service)
+    │     ├── productdb  (product-service)
+    │     └── orderdb    (order-service)
+    │
+    ├── kafka :9092 (KRaft, no Zookeeper)
+    │     └── topic: order.placed (3 partitions)
     │
     ├── discovery-server :8761
-    ├── api-gateway      :8080  ──→ postgres:5432/authdb
-    ├── user-service     :8081  ──→ postgres:5432/userdb
-    ├── product-service  :8082  ──→ postgres:5432/productdb
-    └── order-service    :8083  ──→ postgres:5432/orderdb
+    ├── api-gateway      :8080
+    ├── user-service     :8081
+    ├── product-service  :8082
+    └── order-service    :8083
 
-Containers communicate by name, not IP.
-All secrets via environment variables — zero hardcoded credentials.
-Data stored in Docker named volume: postgres-data
+Volumes:
+postgres-data → database persistence
+kafka-data    → message persistence
 ```
 
 ---
@@ -395,30 +412,25 @@ Data stored in Docker named volume: postgres-data
 
 ```
 Stage 1 (builder) — maven:3.9.6-eclipse-temurin-17
-  ├── Copies pom.xml first (layer cache — deps cached separately)
-  ├── Downloads all Maven dependencies
+  ├── Copies pom.xml first (layer cache)
+  ├── Downloads Maven dependencies
   └── Builds jar with mvn package -DskipTests
 
 Stage 2 (runtime) — eclipse-temurin:17-jre-alpine
-  ├── Minimal JRE-only image (~120MB vs ~500MB)
-  ├── Non-root user for container security
-  └── Copies only the jar from Stage 1
+  ├── ~120MB vs ~500MB single stage
+  ├── Non-root user for security
+  └── Copies only the jar
 ```
 
-### Health Check + Startup Ordering
+### Startup Ordering
 
 ```
-docker compose up
-  │
-  ├── Starts postgres
-  │     └── pg_isready check every 10s
-  │           init-db.sh creates authdb, userdb, productdb, orderdb
-  │
-  ├── Starts discovery-server (after postgres healthy)
-  │     └── /actuator/health check every 15s
-  │
-  └── Starts all 4 services (after Eureka healthy)
-        api-gateway, user-service, product-service, order-service
+postgres    → pg_isready healthcheck
+kafka       → kafka-topics list healthcheck
+     ↓
+discovery-server → /actuator/health
+     ↓
+all 4 services start (guaranteed Eureka + DB + Kafka ready)
 ```
 
 ---
@@ -449,7 +461,8 @@ docker compose up
 ✅ JWT Security at Gateway level (HS256, GlobalFilter, public/protected routes)  
 ✅ BCrypt password hashing (strength 12, salt embedded)  
 ✅ DB-backed auth (register/login with authdb, zero hardcoded credentials)  
+✅ Kafka async event streaming (KRaft mode, OrderPlacedEvent, producer/consumer)
 🚧 Unit + Integration Tests  
-🚧 Kafka (async order events)  
 🚧 Distributed Tracing (Zipkin)  
-🚧 CI/CD (GitHub Actions)  
+🚧 CI/CD (GitHub Actions)
+
