@@ -15,4 +15,8 @@ public class OrderRequestDto {
 
     @Positive(message = "Quantity must be greater than 0")
     private Integer quantity;
+
+    // Populated from JWT X-User-Name header at controller level
+    // Not sent by client — set internally
+    private String placedBy;
 }
