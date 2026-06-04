@@ -20,7 +20,15 @@ public class OrderController {
     }
 
     @PostMapping
-    public ApiResponse<OrderResponseDto> placeOrder(@Valid @RequestBody OrderRequestDto dto) {
+    public ApiResponse<OrderResponseDto> placeOrder(
+        @Valid @RequestBody OrderRequestDto dto,
+        // X-User-Name set by JwtAuthFilter in gateway
+        // defaultValue = "anonymous" for local dev without gateway
+        @RequestHeader(value = "X-User-Name", defaultValue = "anonymous") String username) {
+
+        // Set authenticated user into dto — not from client, from JWT
+        dto.setPlacedBy(username);
+
         OrderResponseDto response = service.placeOrder(dto);
         return new ApiResponse<>(true, "Order Placed", response);
     }

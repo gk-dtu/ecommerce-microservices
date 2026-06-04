@@ -109,6 +109,12 @@
 			<artifactId>spring-boot-starter-actuator</artifactId>
 		</dependency>
 
+        <!-- Kafka — async event-driven communication -->
+        <dependency>
+            <groupId>org.springframework.kafka</groupId>
+            <artifactId>spring-kafka</artifactId>
+        </dependency>
+
 		<!-- Testing -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
