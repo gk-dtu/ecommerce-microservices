@@ -16,4 +16,7 @@ public class Order {
     private Long productId;
     private Integer quantity;
     private double totalPrice;
+
+    // Who placed this order — from JWT identity propagation
+    private String placedBy;
 }
